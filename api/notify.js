@@ -1,40 +1,58 @@
 // api/notify.js
-const admin = require('firebase-admin');
-const { Expo } = require('expo-server-sdk');
+import admin from 'firebase-admin';
+import { Expo } from 'expo-server-sdk';
 
-// Initialize Firebase Admin securely using environment variables
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      // The replace function ensures newline characters in the private key are parsed correctly
-      privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
-    }),
-  });
+let initError = null;
+
+// Wrap Firebase initialization in a try/catch so it doesn't hard-crash Vercel
+try {
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+      }),
+    });
+  }
+} catch (error) {
+  initError = error.message;
 }
 
 const expo = new Expo();
 
-module.exports = async function handler(req, res) {
-  // Add CORS headers so your mobile app can hit this endpoint
+export default async function handler(req, res) {
+  // CORS headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'OPTIONS,POST');
+  res.setHeader('Access-Control-Allow-Methods', 'OPTIONS,POST,GET');
   res.setHeader(
     'Access-Control-Allow-Headers',
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
 
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // 🚨 IF FIREBASE FAILED, PRINT THE ERROR TO THE SCREEN
+  if (initError) {
+    return res.status(500).json({ 
+      error: "Firebase Initialization Failed", 
+      details: initError,
+      hasProjectId: !!process.env.FIREBASE_PROJECT_ID,
+      hasClientEmail: !!process.env.FIREBASE_CLIENT_EMAIL,
+      hasPrivateKey: !!process.env.FIREBASE_PRIVATE_KEY
+    });
   }
 
-  // Reject anything that isn't a POST request
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+  // 🧪 SIMPLE GET ROUTE FOR BROWSER TESTING
+  if (req.method === 'GET') {
+    return res.status(200).json({ status: "API is alive and Firebase is connected perfectly!" });
   }
+
+  // ---------------------------------------------------------
+  // THE ACTUAL PUSH NOTIFICATION LOGIC (POST REQUESTS ONLY)
+  // ---------------------------------------------------------
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   const { title, body, batchId, sellerId } = req.body;
 
@@ -69,6 +87,6 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ success: true, sentCount: messages.length });
   } catch (error) {
     console.error('Error sending push notifications:', error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    return res.status(500).json({ error: 'Failed to send notifications', details: error.message });
   }
-};
+}
